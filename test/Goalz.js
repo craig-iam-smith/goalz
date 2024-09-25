@@ -98,6 +98,7 @@ describe("Goalz", function () {
       expect(await goalzUSD.symbol()).to.equal("glzUSDC");
       expect(await goalzETH.name()).to.equal("Goalz Wrapped Ether");
       expect(await goalzETH.symbol()).to.equal("glzWETH");
+      console.log("goalzUSD", goalz);
     });
   });
 
@@ -160,12 +161,13 @@ describe("Goalz", function () {
       const userBalanceAfter = await usdc.balanceOf(user1.address);
       const goalzBalanceAfter = await usdc.balanceOf(await goalz.getAddress());
       const goalzUSDBalanceAfter = await goalzUSD.balanceOf(user1.address);
-      // const aUSDCBalance = await aUSDC.balanceOf(await goalz.getAddress());
+      await aUSDC.mockBalanceOf(depositAmount);
+      let aUSDCBalance = await aUSDC.balanceOf(await goalz.getAddress());
 
       expect(userBalanceAfter).to.equal(userBalanceBefore - depositAmount);
       expect(goalzBalanceAfter).to.equal(goalzBalanceBefore);
       expect(goalzUSDBalanceAfter).to.equal(goalzUSDBalanceBefore + depositAmount);
-      // expect(aUSDCBalance).to.equal(depositAmount);
+      expect(aUSDCBalance).to.equal(depositAmount);
     });
 
     it("should withdraw funds from a savings goal", async function () {
@@ -177,7 +179,10 @@ describe("Goalz", function () {
       await aUSDC.mockBalanceOf(depositAmount); 
       await goalz.connect(user1).setGoal("Vacation", "For a dream vacation", targetAmount, targetDate, usdcAddress);
       await goalz.connect(user1).deposit(0, depositAmount);
-
+      // check the balance of the aave token
+      let aUSDCBalance = await aUSDC.balanceOf(await goalz.getAddress());
+      console.log("aUSDCBalance", aUSDCBalance);
+      
       const userBalanceBefore = await usdc.balanceOf(user1.address);
       const goalzBalanceBefore = await usdc.balanceOf(await goalz.getAddress());
       const goalzUSDBalanceBefore = await goalzUSD.balanceOf(user1.address);
@@ -185,6 +190,9 @@ describe("Goalz", function () {
       // Set the mock aToken balance
       const interestAccrued = depositAmount * 5n / 100n;
       await aUSDC.mockBalanceOf(depositAmount + interestAccrued); 
+      aUSDCBalance = await aUSDC.balanceOf(await goalz.getAddress());
+      console.log("aUSDCBalance", aUSDCBalance);
+
       await expect(goalz.connect(user1).withdraw(0))
         .to.emit(goalz, "WithdrawMade")
         .withArgs(user1.address, 0, depositAmount + interestAccrued);
@@ -192,7 +200,8 @@ describe("Goalz", function () {
       const userBalanceAfter = await usdc.balanceOf(user1.address);
       const goalzBalanceAfter = await usdc.balanceOf(await goalz.getAddress());
       const goalzUSDBalanceAfter = await goalzUSD.balanceOf(user1.address);
-      // const aUSDCBalance = await aUSDC.balanceOf(await goalz.getAddress());
+      aUSDCBalance = await aUSDC.balanceOf(await goalz.getAddress());
+      console.log("aUSDCBalance", aUSDCBalance);
 
       expect(userBalanceAfter).to.equal(userBalanceBefore + depositAmount + interestAccrued);
       expect(goalzBalanceAfter).to.equal(goalzBalanceBefore);
@@ -205,7 +214,7 @@ describe("Goalz", function () {
     it("should accrue interest over time", async function () {
       const { goalz, usdc, goalzUSD, aUSDC } = await loadFixture(deployGoalzFixture);
 
-      await usdc.mint(await mockLendingPool.getAddress(), depositAmount * 2n); // Give it enough tokens for this test.
+      await usdc.mint(await mockLendingPool.getAddress(), depositAmount * 3n); // Give it enough tokens for this test.
       await aUSDC.mint(await goalz.getAddress(), depositAmount * 2n); // Give it enough tokens for this test.
       
       await aUSDC.mockBalanceOf(depositAmount);
@@ -226,7 +235,7 @@ describe("Goalz", function () {
       newBalance = newBalance + BigInt(1);
       await aUSDC.mockBalanceOf(newBalance);
       const goalzBalance = await aUSDC.balanceOf(await goalz.getAddress());
-//      console.log("goalzBalance", goalzBalance);
+      console.log("goalzBalance", goalzBalance);
 
       const finalGoalzUSDBalance = await goalzUSD.balanceOf(user1.address);
       expect(finalGoalzUSDBalance).to.be.gt(initialGoalzUSDBalance);

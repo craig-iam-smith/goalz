@@ -10,7 +10,8 @@ import "./GoalzToken.sol";
 import "./IGoalzToken.sol";
 import "./gelato/AutomateTaskCreator.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-
+import "./mocks/MockAaveToken.sol";
+import "hardhat/console.sol";
 contract Goalz is ERC721, ERC721Enumerable, AutomateTaskCreator, ReentrancyGuard {
     using Counters for Counters.Counter;
     using SafeERC20 for IERC20;
@@ -41,6 +42,9 @@ contract Goalz is ERC721, ERC721Enumerable, AutomateTaskCreator, ReentrancyGuard
     mapping(address => GoalzToken) public goalzTokens;
     mapping(uint => SavingsGoal) public savingsGoals;
     mapping(uint => AutomatedDeposit) public automatedDeposits;
+    mapping(address => uint) public totalDeposits;
+    address aaveToken;
+
 
     event GoalCreated(address indexed saver, uint indexed goalId, string what, string why, uint targetAmount, uint targetDate, address depositToken, uint256 interestIndex);
     event GoalDeleted(address indexed saver, uint indexed goalId);
@@ -58,12 +62,17 @@ contract Goalz is ERC721, ERC721Enumerable, AutomateTaskCreator, ReentrancyGuard
         require(_initialDepositTokens.length == _initialATokens.length, "Deposit tokens and aTokens should be the same length");
         for (uint i = 0; i < _initialDepositTokens.length; i++) {
             _addDepositToken(_initialDepositTokens[i], _initialATokens[i]);
+            // @dev set aave token to the first aToken
+            // @notice this is because the first aToken is the aave token for USDC
+            // @notice we are not storing the aave tokens in the goalz mapping
+            if (i==0) aaveToken = _initialATokens[i];
         }
         lendingPool = IPool(_lendingPool);
     }
 
     function _addDepositToken(address _depositToken, address _aToken) internal {
         ERC20 _token = ERC20(_depositToken);
+        
         GoalzToken _goalzToken = new GoalzToken(
             string.concat("Goalz ", _token.name()), 
             string.concat("glz", _token.symbol()),
@@ -124,14 +133,14 @@ contract Goalz is ERC721, ERC721Enumerable, AutomateTaskCreator, ReentrancyGuard
 
         SavingsGoal storage goal = savingsGoals[goalId];
         require(goal.depositToken != address(0), "Invalid deposit token");
-        
+        prorateInterest(goal.depositToken);
         // If there was previously a withdraw, reset the end interest index
-        if(goal.endInterestIndex != 0) {
-            goal.endInterestIndex = 0;
-        }
-        if(goal.currentAmount > 0) {
-            goalzTokens[goal.depositToken].updateInterestIndex();
-        }
+        // if(goal.endInterestIndex != 0) {
+        //     goal.endInterestIndex = 0;
+        // }
+        // if(goal.currentAmount > 0) {
+        //     goalzTokens[goal.depositToken].updateInterestIndex();
+        // }
         require(goal.currentAmount + amount <= goal.targetAmount, "Deposit exceeds the goal target amount");
 
         if(goal.currentAmount + amount == goal.targetAmount) {
@@ -144,24 +153,71 @@ contract Goalz is ERC721, ERC721Enumerable, AutomateTaskCreator, ReentrancyGuard
         emit DepositMade(msg.sender, goalId, amount);
     }
 
+    function prorateInterest(address depositToken) internal {
+        uint256 totalBalanceAave = MockAaveToken(aaveToken).balanceOf(address(this));
+        uint256 currentDeposits = totalDeposits[depositToken];
+        if((totalBalanceAave == 0) || (currentDeposits == 0)) {
+            return;
+        }
+        console.log("totalBalanceAave", totalBalanceAave);
+        console.log("currentDeposits", currentDeposits);
+        require(totalBalanceAave >= currentDeposits, "Insufficient balance");
+        uint256 proratableInterest = totalBalanceAave - currentDeposits;
+        goalzTokens[depositToken].mint(address(this), proratableInterest);
+        if (proratableInterest == 0) {
+            return;
+        }
+        uint256 accumulatedInterest = 0;
+        uint256 power = 10 ** ERC20(depositToken).decimals();
+        uint256 denominator = proratableInterest * power;
+        for (uint i = 0; i < _tokenIdCounter.current(); i++) {
+            SavingsGoal storage goal = savingsGoals[i];
+            console.log("goal.currentAmount", i +  goal.currentAmount);
+            if ((goal.depositToken == depositToken) && (!goal.complete)) {
+                uint interest = goal.currentAmount * proratableInterest / currentDeposits;
+                //uint256 currentInterest = goal.currentAmount * power / denominator;
+                // write back to memory
+                savingsGoals[i].currentAmount += interest;
+                // make temporary variable to hold accumulated interest
+                accumulatedInterest += interest;
+                // mint interest to the goalz token to the user doing the deposit
+                // this will require the user to be tracked in the goal 
+                goalzTokens[depositToken].mint(address(this), interest);
+            }
+        }
+        console.log("accumulatedInterest", accumulatedInterest);
+        console.log("proratableInterest", proratableInterest);
+        require(accumulatedInterest == proratableInterest, "Accumulated interest does not match proratable interest");
+        totalDeposits[depositToken] += proratableInterest;
+        console.log("totalDeposits", totalDeposits[depositToken]);
+    }
+
     function withdraw(uint goalId) public goalExists(goalId) isGoalOwner(goalId) nonReentrant {
         SavingsGoal storage goal = savingsGoals[goalId];
         require(goal.currentAmount > 0, "No funds to withdraw");
         require(goal.depositToken != address(0), "Invalid deposit token");
 
-        uint power = 10 ** ERC20(goal.depositToken).decimals();
+//        uint power = 10 ** ERC20(goal.depositToken).decimals();
         uint amount = goal.currentAmount;
         address depositToken = goal.depositToken;
         GoalzToken goalzToken = goalzTokens[depositToken];
         require(address(goalzToken) != address(0), "Invalid GoalzToken");
-
-        goal.currentAmount = 0;
-        goal.lastInterestIndex = goalzToken.getInterestIndex();
+        prorateInterest(goal.depositToken);
+ //       goal.currentAmount = 0;
+//        goal.lastInterestIndex = goalzToken.getInterestIndex();
+        console.log("amount", amount);
+        console.log("goalzToken.balanceOf(address(this))", goalzToken.balanceOf(address(this)));
+        console.log("goalzToken.balanceOf(msg.sender)", goalzToken.balanceOf(msg.sender));
         goalzToken.burn(msg.sender, amount); // Triggers an interestIndex update
-        goal.endInterestIndex = goalzToken.getNextInterestIndex();
-        uint _amountWithInterest = amount * (power + (goal.endInterestIndex - goal.lastInterestIndex)) / power;
+//        goal.endInterestIndex = goalzToken.getNextInterestIndex();
+//        uint _amountWithInterest = amount * (power + (goal.endInterestIndex - goal.lastInterestIndex)) / power;
+        uint _amountWithInterest = goal.currentAmount;
+        console.log("withdrawing", _amountWithInterest);
+        console.log("balanceOf", IERC20(depositToken).balanceOf(address(this)));
+        console.log("msg.sender", msg.sender);
         lendingPool.withdraw(depositToken, _amountWithInterest, msg.sender);
-        goal.endInterestIndex = 0;
+        totalDeposits[depositToken] -= _amountWithInterest;
+//        goal.endInterestIndex = 0;
 
         emit WithdrawMade(msg.sender, goalId, _amountWithInterest);
     }
@@ -244,7 +300,10 @@ contract Goalz is ERC721, ERC721Enumerable, AutomateTaskCreator, ReentrancyGuard
         IERC20(_depositToken).safeTransferFrom(account, address(this), amount);
         goalzTokens[_depositToken].mint(account, amount);
         goal.currentAmount += amount;
+        totalDeposits[_depositToken] += amount;
         _depositToAave(_depositToken, amount);
+        // balanceOf aave tokens
+        console.log("aave balanceOf", IERC20(_depositToken).balanceOf(address(this)));
     }
 
     function _depositToAave(address token, uint amount) internal {

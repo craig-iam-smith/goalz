@@ -21,7 +21,10 @@ contract MockLendingPool {
         lastDepositAmount = amount;
         lastDepositToken = asset;
         IERC20(asset).transferFrom(msg.sender, address(this), amount);
+
         MockAaveToken(aTokens[asset]).mint(onBehalfOf, amount);
+//        console.log("onBehalfOf: ", onBehalfOf);
+//        console.log("aTokens[asset]: ", aTokens[asset]);
     }
 
     function withdraw(address asset, uint256 amount, address to) external returns (uint256) {
@@ -31,7 +34,7 @@ contract MockLendingPool {
         
         lastWithdrawAmount = amount;
         lastWithdrawToken = asset;
-//        console.log("message.sender: ", msg.sender);
+        console.log("message.sender: ", msg.sender);
         aToken.burn(msg.sender, amount);
         IERC20(asset).transfer(to, amount);
         return amount;
